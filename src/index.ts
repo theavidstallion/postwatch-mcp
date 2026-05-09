@@ -114,14 +114,18 @@ const transports = new Map<string, SSEServerTransport>();
 app.get('/mcp', async (req, res) => {
     console.log("🟢 Incoming SSE Connection...");
 
-    // 1. Bypass Render's aggressive proxy buffering and timeouts
+    // 1. THE RENDER PROXY KILLERS: Tell Nginx/Cloudflare to immediately stream data
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Cache-Control', 'no-cache');
+
+    // 2. Prevent the socket from closing early
     req.socket.setTimeout(0);
     req.socket.setNoDelay(true);
     req.socket.setKeepAlive(true);
 
     const server = buildMcpServer();
 
-    // 2. CRITICAL FIX: Provide the absolute URL so PO's backend parser doesn't crash
+    // 3. The absolute URL 
     const messageEndpoint = 'https://postwatch-mcp.onrender.com/mcp/message';
     const transport = new SSEServerTransport(messageEndpoint, res);
 
