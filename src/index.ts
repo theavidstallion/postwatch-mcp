@@ -111,49 +111,54 @@ function buildMcpServer() {
 // ── Native Connection Handling ────────────────────────────────────────────
 const transports = new Map<string, SSEServerTransport>();
 
+// SSE endpoint — this is the URL you register with Prompt Opinion
 app.get('/mcp', async (req, res) => {
-    console.log("🟢 Incoming SSE Connection...");
+    console.log("🟢 Incoming SSE Connection from Prompt Opinion...");
 
-    // 1. THE RENDER PROXY KILLERS: Tell Nginx/Cloudflare to immediately stream data
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.setHeader('Cache-Control', 'no-cache');
+    // 1. Force the headers and status IMMEDIATELY to satisfy Azure's proxy
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no' // Extra insurance for Nginx-style proxies
+    });
 
-    // 2. Prevent the socket from closing early
-    req.socket.setTimeout(0);
-    req.socket.setNoDelay(true);
-    req.socket.setKeepAlive(true);
+    // 2. Send an immediate heartbeat to keep the stream "readable"
+    res.write('retry: 1000\n\n');
+    res.write(': ping\n\n');
 
     const server = buildMcpServer();
+    const transport = new SSEServerTransport('/mcp/message', res);
 
-    // 3. The absolute URL 
-    const messageEndpoint = 'https://postwatch-mcp.onrender.com/mcp/message';
-    const transport = new SSEServerTransport(messageEndpoint, res);
-
-    await server.connect(transport);
-
-    transports.set(transport.sessionId, transport);
-    console.log(`✅ Connection established. Session ID: ${transport.sessionId}`);
+    const sessionId = (req.query.sessionId as string) ?? transport.sessionId;
+    transports.set(sessionId, transport);
 
     res.on('close', () => {
-        console.log(`🔴 Connection closed: ${transport.sessionId}`);
-        transports.delete(transport.sessionId);
+        console.log(`🔴 Connection closed for session: ${sessionId}`);
+        transports.delete(sessionId);
     });
+
+    await server.connect(transport);
+    console.log(`✅ MCP Server connected to session: ${sessionId}`);
 });
 
+// Message endpoint
 app.post('/mcp/message', async (req, res) => {
     const sessionId = req.query.sessionId as string;
     const transport = transports.get(sessionId);
 
     if (!transport) {
-        console.error(`❌ Rejecting message: Session ${sessionId} not found`);
-        res.status(404).send('Session not found');
+        console.error(`❌ Session ${sessionId} not found for POST`);
+        res.status(404).json({ error: "Session not found" });
         return;
     }
 
     await transport.handlePostMessage(req, res);
 });
 
-const PORT = Number(process.env.PORT ?? 3000);
+// ── Start Server ──────────────────────────────────────────────────────────
+// Use 0.0.0.0 to ensure Azure's internal network can route to the port
+const PORT = Number(process.env.PORT ?? 8080);
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`✅ MCP Server Live on port ${PORT}`);
+    console.log(`🚀 PostWatch MCP Server Listening on 0.0.0.0:${PORT}`);
 });
