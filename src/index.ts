@@ -5,159 +5,143 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import { extractSharpContext } from './sharp.js';
 import { getVitalsTrend, getClinical, assessDeteriorationRisk } from './tools.js';
-import 'dotenv/config';
 
 const app = express();
 app.use(express.json());
 
-// Health check — use this to verify deployment
+// ── Health Check ──────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
     res.json({
         status: 'ok',
         name: 'post-discharge-deterioration-monitor',
         version: '1.0.0',
-        sharp_headers_required: [
-            'X-FHIR-Server-URL',
-            'X-FHIR-Access-Token',
-            'X-Patient-ID',
-        ],
+        platform: 'Render',
+        timestamp: new Date().toISOString()
     });
 });
 
-// One transport per SSE connection
+// Session storage to link GET (SSE) and POST (Messages)
 const transports = new Map<string, SSEServerTransport>();
 
+/**
+ * Builds a fresh instance of the MCP server with all tools registered.
+ */
 function buildMcpServer() {
     const server = new McpServer({
         name: 'post-discharge-deterioration-monitor',
         version: '1.0.0',
     });
 
-    // ── Tool 1 ────────────────────────────────────────────────────────────────
+    // Tool 1: Vitals Trend
     server.tool(
         'get_vitals_trend',
-        'Retrieves chronological vital sign readings for a post-discharge patient from the FHIR store.',
-        { days: z.number().optional().default(7).describe('Days of history to retrieve') },
+        'Retrieves chronological vital sign readings.',
+        { days: z.number().optional().default(7) },
         async (args, extra) => {
             const req = (extra as any)._meta?.httpRequest;
             const sharp = req ? extractSharpContext(req) : null;
+            if (!sharp) throw new Error('Missing SHARP headers');
 
-            if (!sharp) {
-                return {
-                    isError: true,
-                    content: [{ type: 'text' as const, text: 'Missing SHARP headers: X-FHIR-Server-URL, X-FHIR-Access-Token, X-Patient-ID' }],
-                };
-            }
-
-            try {
-                const result = await getVitalsTrend({
-                    fhir_server_url: sharp.fhirServerUrl,
-                    fhir_access_token: sharp.fhirAccessToken,
-                    patient_id: sharp.patientId,
-                    days: args.days,
-                });
-                return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
-            } catch (err: any) {
-                return { isError: true, content: [{ type: 'text' as const, text: err.message }] };
-            }
+            const result = await getVitalsTrend({
+                fhir_server_url: sharp.fhirServerUrl,
+                fhir_access_token: sharp.fhirAccessToken,
+                patient_id: sharp.patientId,
+                days: args.days,
+            });
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
     );
 
-    // ── Tool 2 ────────────────────────────────────────────────────────────────
+    // Tool 2: Clinical Context
     server.tool(
         'get_clinical_context',
-        'Retrieves patient clinical context: discharge diagnosis, active conditions, days since discharge.',
+        'Retrieves discharge diagnosis and active conditions.',
         {},
         async (_args, extra) => {
             const req = (extra as any)._meta?.httpRequest;
             const sharp = req ? extractSharpContext(req) : null;
+            if (!sharp) throw new Error('Missing SHARP headers');
 
-            if (!sharp) {
-                return {
-                    isError: true,
-                    content: [{ type: 'text' as const, text: 'Missing SHARP headers' }],
-                };
-            }
-
-            try {
-                const result = await getClinical({
-                    fhir_server_url: sharp.fhirServerUrl,
-                    fhir_access_token: sharp.fhirAccessToken,
-                    patient_id: sharp.patientId,
-                });
-                return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
-            } catch (err: any) {
-                return { isError: true, content: [{ type: 'text' as const, text: err.message }] };
-            }
+            const result = await getClinical({
+                fhir_server_url: sharp.fhirServerUrl,
+                fhir_access_token: sharp.fhirAccessToken,
+                patient_id: sharp.patientId,
+            });
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
     );
 
-    // ── Tool 3 ────────────────────────────────────────────────────────────────
+    // Tool 3: AI Deterioration Risk (The Winner Tool)
     server.tool(
         'assess_deterioration_risk',
-        'Analyzes post-discharge vital sign trends using AI temporal reasoning. Detects compound multi-signal deterioration patterns that threshold-based systems miss. Returns FHIR RiskAssessment with clinical escalation recommendation.',
-        { days: z.number().optional().default(7).describe('Days of history to analyze') },
+        'AI temporal analysis of vitals to detect patterns threshold systems miss.',
+        { days: z.number().optional().default(7) },
         async (args, extra) => {
             const req = (extra as any)._meta?.httpRequest;
             const sharp = req ? extractSharpContext(req) : null;
+            if (!sharp) throw new Error('Missing SHARP headers');
 
-            if (!sharp) {
-                return {
-                    isError: true,
-                    content: [{ type: 'text' as const, text: 'Missing SHARP headers' }],
-                };
-            }
-
-            try {
-                const result = await assessDeteriorationRisk({
-                    fhir_server_url: sharp.fhirServerUrl,
-                    fhir_access_token: sharp.fhirAccessToken,
-                    patient_id: sharp.patientId,
-                    days: args.days,
-                });
-                return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
-            } catch (err: any) {
-                return { isError: true, content: [{ type: 'text' as const, text: err.message }] };
-            }
+            const result = await assessDeteriorationRisk({
+                fhir_server_url: sharp.fhirServerUrl,
+                fhir_access_token: sharp.fhirAccessToken,
+                patient_id: sharp.patientId,
+                days: args.days,
+            });
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
     );
 
     return server;
 }
 
-// SSE endpoint — this is the URL you register with Prompt Opinion
+// ── Unified MCP Endpoint ──────────────────────────────────────────────────
+
+// GET: Establishes the SSE Connection
 app.get('/mcp', async (req, res) => {
-    const sessionId = (req.query.sessionId as string) ?? `session-${Date.now()}`;
+    // Generate or use provided sessionId
+    const sessionId = (req.query.sessionId as string) ?? 'session-default';
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
+    // SSEServerTransport(endpoint, response) 
+    // We set the endpoint to '/mcp' so POSTs come back to this same route
+    const transport = new SSEServerTransport('/mcp', res);
     const server = buildMcpServer();
-    const transport = new SSEServerTransport('/mcp/message', res);
 
     transports.set(sessionId, transport);
-    res.on('close', () => transports.delete(sessionId));
+
+    res.on('close', () => {
+        transports.delete(sessionId);
+    });
 
     await server.connect(transport);
 });
 
-// Message endpoint — paired with SSE
-app.post('/mcp/message', async (req, res) => {
-    const sessionId = (req.query.sessionId as string);
+// POST: Receives messages/tool calls from the platform
+app.post('/mcp', async (req, res) => {
+    const sessionId = (req.query.sessionId as string) ?? 'session-default';
     const transport = transports.get(sessionId);
 
     if (!transport) {
-        res.status(404).json({ error: `Session ${sessionId} not found` });
+        // Fail gracefully: if the specific session is lost, try the default one
+        const fallbackTransport = transports.get('session-default');
+        if (fallbackTransport) {
+            await fallbackTransport.handlePostMessage(req, res, req.body);
+        } else {
+            res.status(404).json({ error: "No active MCP session found. Connect via GET first." });
+        }
         return;
     }
 
     await transport.handlePostMessage(req, res, req.body);
 });
 
+// ── Start Server ──────────────────────────────────────────────────────────
 const PORT = Number(process.env.PORT ?? 3000);
-app.listen(PORT, () => {
-    console.log(`MCP server running on http://localhost:${PORT}`);
-    console.log(`SSE endpoint: http://localhost:${PORT}/mcp`);
-    console.log(`Health: http://localhost:${PORT}/health`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`
+✅ PostWatch MCP Server Live
+--------------------------------------------------
+Health Check:  http://localhost:${PORT}/health
+MCP Endpoint:  http://localhost:${PORT}/mcp
+--------------------------------------------------
+    `);
 });
