@@ -115,30 +115,24 @@ const transports = new Map<string, SSEServerTransport>();
 app.get('/mcp', async (req, res) => {
     console.log("🟢 Incoming SSE Connection from Prompt Opinion...");
 
-    // 1. STOPS AZURE FROM BUFFERING THE DATA
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // Forces Nginx/Proxies to stream
-    res.flushHeaders(); // Sends headers to client immediately
+    // 1. Set the buffer-killer header BEFORE the SDK takes over
+    res.setHeader('X-Accel-Buffering', 'no');
 
-    // 2. THE HEARTBEAT: Send an immediate invisible comment to 'prime' the stream
-    res.write(': keep-alive\n\n');
-
-    // 3. Keep the socket alive indefinitely
+    // 2. Optimization for Azure/C# parsers
     req.socket.setKeepAlive(true);
     req.socket.setNoDelay(true);
-    req.socket.setTimeout(0);
 
     const server = buildMcpServer();
 
-    // 4. Using relative path for the message endpoint
+    // 3. The SDK will handle res.writeHead(200, ...) internally now.
+    // We use the absolute path to ensure the C# client doesn't get lost.
     const transport = new SSEServerTransport('/mcp/message', res);
 
     await server.connect(transport);
 
     const sessionId = transport.sessionId;
     transports.set(sessionId, transport);
+
     console.log(`✅ Connection established. Session ID: ${sessionId}`);
 
     res.on('close', () => {
