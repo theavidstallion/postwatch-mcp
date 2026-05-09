@@ -115,31 +115,36 @@ const transports = new Map<string, SSEServerTransport>();
 app.get('/mcp', async (req, res) => {
     console.log("🟢 Incoming SSE Connection from Prompt Opinion...");
 
-    // 1. Force the headers and status IMMEDIATELY to satisfy Azure's proxy
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no' // Extra insurance for Nginx-style proxies
-    });
+    // 1. STOPS AZURE FROM BUFFERING THE DATA
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Forces Nginx/Proxies to stream
+    res.flushHeaders(); // Sends headers to client immediately
 
-    // 2. Send an immediate heartbeat to keep the stream "readable"
-    res.write('retry: 1000\n\n');
-    res.write(': ping\n\n');
+    // 2. THE HEARTBEAT: Send an immediate invisible comment to 'prime' the stream
+    res.write(': keep-alive\n\n');
+
+    // 3. Keep the socket alive indefinitely
+    req.socket.setKeepAlive(true);
+    req.socket.setNoDelay(true);
+    req.socket.setTimeout(0);
 
     const server = buildMcpServer();
+
+    // 4. Using relative path for the message endpoint
     const transport = new SSEServerTransport('/mcp/message', res);
 
-    const sessionId = (req.query.sessionId as string) ?? transport.sessionId;
+    await server.connect(transport);
+
+    const sessionId = transport.sessionId;
     transports.set(sessionId, transport);
+    console.log(`✅ Connection established. Session ID: ${sessionId}`);
 
     res.on('close', () => {
-        console.log(`🔴 Connection closed for session: ${sessionId}`);
+        console.log(`🔴 Connection closed: ${sessionId}`);
         transports.delete(sessionId);
     });
-
-    await server.connect(transport);
-    console.log(`✅ MCP Server connected to session: ${sessionId}`);
 });
 
 // Message endpoint
