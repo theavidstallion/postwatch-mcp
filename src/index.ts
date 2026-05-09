@@ -94,45 +94,38 @@ function buildMcpServer() {
     return server;
 }
 
-// ── Unified MCP Endpoint ──────────────────────────────────────────────────
+// ── Unified MCP Endpoint (Hackathon Bulletproof Version) ─────────────
 
-// GET: Establishes the SSE Connection
+// Single global transport since PO is the only client
+let globalTransport: SSEServerTransport | null = null;
+let globalServer: McpServer | null = null;
+
 app.get('/mcp', async (req, res) => {
-    // Generate or use provided sessionId
-    const sessionId = (req.query.sessionId as string) ?? 'session-default';
+    // We explicitly tell the SDK the message endpoint is '/mcp/message'
+    globalTransport = new SSEServerTransport('/mcp/message', res);
 
-    // SSEServerTransport(endpoint, response) 
-    // We set the endpoint to '/mcp' so POSTs come back to this same route
-    const transport = new SSEServerTransport('/mcp', res);
-    const server = buildMcpServer();
-
-    transports.set(sessionId, transport);
-
-    res.on('close', () => {
-        transports.delete(sessionId);
-    });
-
-    await server.connect(transport);
-});
-
-// POST: Receives messages/tool calls from the platform
-app.post('/mcp', async (req, res) => {
-    const sessionId = (req.query.sessionId as string) ?? 'session-default';
-    const transport = transports.get(sessionId);
-
-    if (!transport) {
-        // Fail gracefully: if the specific session is lost, try the default one
-        const fallbackTransport = transports.get('session-default');
-        if (fallbackTransport) {
-            await fallbackTransport.handlePostMessage(req, res, req.body);
-        } else {
-            res.status(404).json({ error: "No active MCP session found. Connect via GET first." });
-        }
-        return;
+    // Only build the server once to prevent memory leaks
+    if (!globalServer) {
+        globalServer = buildMcpServer();
     }
 
-    await transport.handlePostMessage(req, res, req.body);
+    await globalServer.connect(globalTransport);
+    console.log("✅ GET /mcp connection established by Prompt Opinion");
 });
+
+// A single handler function for incoming messages
+const handlePost = async (req: express.Request, res: express.Response) => {
+    if (!globalTransport) {
+        console.error("❌ POST received before GET initialization");
+        // Returning 202 instead of 404 so PO's aggressive ping doesn't fail the registration
+        return res.status(202).json({ warning: "Waiting for GET stream" });
+    }
+    await globalTransport.handlePostMessage(req, res);
+};
+
+// Listen on both possible routes Prompt Opinion might use
+app.post('/mcp', handlePost);
+app.post('/mcp/message', handlePost);
 
 // ── Start Server ──────────────────────────────────────────────────────────
 const PORT = Number(process.env.PORT ?? 3000);
