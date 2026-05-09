@@ -114,11 +114,16 @@ const transports = new Map<string, SSEServerTransport>();
 app.get('/mcp', async (req, res) => {
     console.log("🟢 Incoming SSE Connection...");
 
-    // Create a fresh server instance so validation pings never crash it
+    // 1. Bypass Render's aggressive proxy buffering and timeouts
+    req.socket.setTimeout(0);
+    req.socket.setNoDelay(true);
+    req.socket.setKeepAlive(true);
+
     const server = buildMcpServer();
 
-    // SDK automatically generates a sessionId and tells PO to POST to /mcp/message?sessionId=...
-    const transport = new SSEServerTransport('/mcp/message', res);
+    // 2. CRITICAL FIX: Provide the absolute URL so PO's backend parser doesn't crash
+    const messageEndpoint = 'https://postwatch-mcp.onrender.com/mcp/message';
+    const transport = new SSEServerTransport(messageEndpoint, res);
 
     await server.connect(transport);
 
