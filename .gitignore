@@ -1,6 +1,5 @@
 .env
 node_modules
 
-.gitignore
-
-src/test.ts
+.gitignor
+*/test.ts
