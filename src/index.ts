@@ -1,97 +1,54 @@
 import 'dotenv/config';
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+// Note: Use this specific transport from the SDK
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { extractSharpContext } from './sharp.js';
 import { getVitalsTrend, getClinical, assessDeteriorationRisk } from './tools.js';
+import cors from 'cors';
 
 const app = express();
+const port = process.env["PORT"] || 8080;
 
-// ── CORS Configuration (Crucial for external platforms like PO) ───────────
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-fhir-server-url, x-fhir-access-token, x-patient-id');
-    if (req.method === 'OPTIONS') {
-        res.sendStatus(200);
-        return;
-    }
-    next();
-});
-
+app.use(cors());
 app.use(express.json());
 
-// ── Health Check ──────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', version: '1.0.0' });
+app.get("/health", (_, res) => {
+    res.send("PostWatch is alive");
 });
 
-// ── MCP Server Builder ────────────────────────────────────────────────────
-function buildMcpServer() {
-    const server = new McpServer({
-        name: 'post-discharge-deterioration-monitor',
-        version: '1.0.0',
-    });
-
-    // ── Tool 1 ──
-    server.tool(
-        'get_vitals_trend',
-        'Retrieves chronological vital sign readings for a post-discharge patient from the FHIR store.',
-        { days: z.number().optional().default(7).describe('Days of history to retrieve') },
-        async (args, extra) => {
-            const req = (extra as any)._meta?.httpRequest;
-            const sharp = req ? extractSharpContext(req) : null;
-            if (!sharp) return { isError: true, content: [{ type: 'text', text: 'Missing SHARP headers' }] };
-
-            try {
-                const result = await getVitalsTrend({
-                    fhir_server_url: sharp.fhirServerUrl,
-                    fhir_access_token: sharp.fhirAccessToken,
-                    patient_id: sharp.patientId,
-                    days: args.days,
-                });
-                return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-            } catch (err: any) {
-                return { isError: true, content: [{ type: 'text', text: err.message }] };
+app.post("/mcp", async (req, res) => {
+    try {
+        // 1. Mirror their exact capabilities object
+        const server = new McpServer(
+            {
+                name: "PostWatch Deterioration Monitor",
+                version: "1.0.0",
+            },
+            {
+                capabilities: {
+                    extensions: {
+                        "ai.promptopinion/fhir-context": {
+                            scopes: [
+                                { name: "patient/Patient.rs", required: true },
+                                { name: "offline_access" },
+                                { name: "patient/Observation.rs" },
+                                { name: "patient/Condition.rs" },
+                            ],
+                        },
+                    },
+                },
             }
-        }
-    );
+        );
 
-    // ── Tool 2 ──
-    server.tool(
-        'get_clinical_context',
-        'Retrieves patient clinical context: discharge diagnosis, active conditions, days since discharge.',
-        {},
-        async (_args, extra) => {
-            const req = (extra as any)._meta?.httpRequest;
-            const sharp = req ? extractSharpContext(req) : null;
-            if (!sharp) return { isError: true, content: [{ type: 'text', text: 'Missing SHARP headers' }] };
-
-            try {
-                const result = await getClinical({
-                    fhir_server_url: sharp.fhirServerUrl,
-                    fhir_access_token: sharp.fhirAccessToken,
-                    patient_id: sharp.patientId,
-                });
-                return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-            } catch (err: any) {
-                return { isError: true, content: [{ type: 'text', text: err.message }] };
-            }
-        }
-    );
-
-    // ── Tool 3 ──
-    server.tool(
-        'assess_deterioration_risk',
-        'Analyzes post-discharge vital sign trends using AI temporal reasoning.',
-        { days: z.number().optional().default(7).describe('Days of history to analyze') },
-        async (args, extra) => {
-            const req = (extra as any)._meta?.httpRequest;
-            const sharp = req ? extractSharpContext(req) : null;
-            if (!sharp) return { isError: true, content: [{ type: 'text', text: 'Missing SHARP headers' }] };
-
-            try {
+        // 2. Register your tools inside the POST handler (one server per request)
+        server.tool(
+            'assess_deterioration_risk',
+            'Analyzes post-discharge vital sign trends using AI.',
+            { days: z.number().optional().default(7) },
+            async (args) => {
+                const sharp = extractSharpContext(req); // Pass the current request
                 const result = await assessDeteriorationRisk({
                     fhir_server_url: sharp.fhirServerUrl,
                     fhir_access_token: sharp.fhirAccessToken,
@@ -99,69 +56,37 @@ function buildMcpServer() {
                     days: args.days,
                 });
                 return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-            } catch (err: any) {
-                return { isError: true, content: [{ type: 'text', text: err.message }] };
             }
+        );
+
+        // [Add your other 2 tools here following the same pattern]
+
+        // 3. Use the Streamable transport
+        const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined,
+        });
+
+        res.on("close", () => {
+            transport.close();
+            server.close();
+        });
+
+        // 4. Connect and immediately handle the request body
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+
+    } catch (error) {
+        console.log("Error handling MCP request:", error);
+        if (!res.headersSent) {
+            res.status(500).json({
+                jsonrpc: "2.0",
+                error: { code: -32603, message: "Internal server error" },
+                id: null,
+            });
         }
-    );
-
-    return server;
-}
-
-// ── Native Connection Handling ────────────────────────────────────────────
-const transports = new Map<string, SSEServerTransport>();
-
-// SSE endpoint — this is the URL you register with Prompt Opinion
-app.get('/mcp', async (req, res) => {
-    console.log("🟢 Incoming SSE Connection from Prompt Opinion...");
-
-    // 1. Force the headers into the stream immediately
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no'
-    });
-
-    // 2. Send an immediate empty comment to "prime" the C# stream reader
-    res.write(':\n\n');
-    // Ensure the data is flushed through the Azure proxy
-    if ((res as any).flush) (res as any).flush();
-
-    const server = buildMcpServer();
-
-    // 3. Absolute URL is safer for enterprise proxies
-    const transport = new SSEServerTransport('https://postwatch-mcp.azurewebsites.net/mcp/message', res);
-
-    await server.connect(transport);
-
-    const sessionId = transport.sessionId;
-    transports.set(sessionId, transport);
-    console.log(`✅ Connection established. Session ID: ${sessionId}`);
-
-    res.on('close', () => {
-        console.log(`🔴 Connection closed: ${sessionId}`);
-        transports.delete(sessionId);
-    });
-});
-
-// Message endpoint
-app.post('/mcp/message', async (req, res) => {
-    const sessionId = req.query.sessionId as string;
-    const transport = transports.get(sessionId);
-
-    if (!transport) {
-        console.error(`❌ Session ${sessionId} not found for POST`);
-        res.status(404).json({ error: "Session not found" });
-        return;
     }
-
-    await transport.handlePostMessage(req, res);
 });
 
-// ── Start Server ──────────────────────────────────────────────────────────
-// Use 0.0.0.0 to ensure Azure's internal network can route to the port
-const PORT = Number(process.env.PORT ?? 8080);
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 PostWatch MCP Server Listening on 0.0.0.0:${PORT}`);
+app.listen(port, () => {
+    console.log(`🚀 PostWatch Streamable MCP listening on port ${port}`);
 });
