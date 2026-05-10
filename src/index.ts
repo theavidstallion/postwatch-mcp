@@ -41,21 +41,14 @@ app.post("/mcp", async (req, res) => {
             }
         );
 
-        // ── Tool 1: Risk Assessment ──────────────────────────────────────────
+        // ── Tool 1: Risk Assessment (The Star of the Show) ───────────────────
         server.tool(
             'assess_deterioration_risk',
-            'Analyzes post-discharge vital sign trends using AI.',
+            'Analyzes post-discharge vital sign trends using AI temporal reasoning to detect compound deterioration.',
             { days: z.number().optional().default(7) },
             async (args) => {
                 const sharp = extractSharpContext(req);
-
-                // TypeScript Guard: Handle the null case explicitly
-                if (!sharp) {
-                    return {
-                        isError: true,
-                        content: [{ type: 'text', text: 'Missing required SHARP headers (FHIR URL, Token, or Patient ID)' }]
-                    };
-                }
+                if (!sharp) return { isError: true, content: [{ type: 'text', text: 'Missing SHARP headers' }] };
 
                 const result = await assessDeteriorationRisk({
                     fhir_server_url: sharp.fhirServerUrl,
@@ -67,7 +60,42 @@ app.post("/mcp", async (req, res) => {
             }
         );
 
-        // [Note: Apply the same 'if (!sharp)' check for Tool 2 and Tool 3]
+        // ── Tool 2: Vitals Trend (Raw Data) ─────────────────────────────────
+        server.tool(
+            'get_vitals_trend',
+            'Retrieves chronological vital sign readings for a post-discharge patient.',
+            { days: z.number().optional().default(7) },
+            async (args) => {
+                const sharp = extractSharpContext(req);
+                if (!sharp) return { isError: true, content: [{ type: 'text', text: 'Missing SHARP headers' }] };
+
+                const result = await getVitalsTrend({
+                    fhir_server_url: sharp.fhirServerUrl,
+                    fhir_access_token: sharp.fhirAccessToken,
+                    patient_id: sharp.patientId,
+                    days: args.days,
+                });
+                return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+            }
+        );
+
+        // ── Tool 3: Clinical Context (Metadata) ─────────────────────────────
+        server.tool(
+            'get_clinical_context',
+            'Retrieves discharge diagnosis and active conditions for the patient.',
+            {},
+            async () => {
+                const sharp = extractSharpContext(req);
+                if (!sharp) return { isError: true, content: [{ type: 'text', text: 'Missing SHARP headers' }] };
+
+                const result = await getClinical({
+                    fhir_server_url: sharp.fhirServerUrl,
+                    fhir_access_token: sharp.fhirAccessToken,
+                    patient_id: sharp.patientId,
+                });
+                return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+            }
+        );
 
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
