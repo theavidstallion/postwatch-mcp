@@ -20,7 +20,6 @@ app.get("/health", (_, res) => {
 
 app.post("/mcp", async (req, res) => {
     try {
-        // 1. Mirror their exact capabilities object
         const server = new McpServer(
             {
                 name: "PostWatch Deterioration Monitor",
@@ -42,13 +41,22 @@ app.post("/mcp", async (req, res) => {
             }
         );
 
-        // 2. Register your tools inside the POST handler (one server per request)
+        // ── Tool 1: Risk Assessment ──────────────────────────────────────────
         server.tool(
             'assess_deterioration_risk',
             'Analyzes post-discharge vital sign trends using AI.',
             { days: z.number().optional().default(7) },
             async (args) => {
-                const sharp = extractSharpContext(req); // Pass the current request
+                const sharp = extractSharpContext(req);
+
+                // TypeScript Guard: Handle the null case explicitly
+                if (!sharp) {
+                    return {
+                        isError: true,
+                        content: [{ type: 'text', text: 'Missing required SHARP headers (FHIR URL, Token, or Patient ID)' }]
+                    };
+                }
+
                 const result = await assessDeteriorationRisk({
                     fhir_server_url: sharp.fhirServerUrl,
                     fhir_access_token: sharp.fhirAccessToken,
@@ -59,9 +67,8 @@ app.post("/mcp", async (req, res) => {
             }
         );
 
-        // [Add your other 2 tools here following the same pattern]
+        // [Note: Apply the same 'if (!sharp)' check for Tool 2 and Tool 3]
 
-        // 3. Use the Streamable transport
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
         });
@@ -71,7 +78,6 @@ app.post("/mcp", async (req, res) => {
             server.close();
         });
 
-        // 4. Connect and immediately handle the request body
         await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
 
