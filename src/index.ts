@@ -4,7 +4,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 // Note: Use this specific transport from the SDK
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { extractSharpContext } from './sharp.js';
 import { getVitalsTrend, getClinical, assessDeteriorationRisk } from './tools.js';
 import cors from 'cors';
 
@@ -44,56 +43,59 @@ app.post("/mcp", async (req, res) => {
         // ── Tool 1: Risk Assessment (The Star of the Show) ───────────────────
         server.tool(
             'assess_deterioration_risk',
-            'Analyzes post-discharge vital sign trends using AI temporal reasoning to detect compound deterioration.',
-            { days: z.number().optional().default(7) },
+            'Analyzes post-discharge vital sign trends using AI temporal reasoning. Detects compound multi-signal deterioration patterns that threshold-based systems miss. Returns FHIR RiskAssessment with clinical escalation recommendation.',
+            {
+                patientId: z.string().describe('The FHIR Patient ID'),
+                days: z.number().optional().default(30),
+            },
             async (args) => {
-                const sharp = extractSharpContext(req);
-                if (!sharp) return { isError: true, content: [{ type: 'text', text: 'Missing SHARP headers' }] };
-
-                const result = await assessDeteriorationRisk({
-                    fhir_server_url: sharp.fhirServerUrl,
-                    fhir_access_token: sharp.fhirAccessToken,
-                    patient_id: sharp.patientId,
-                    days: args.days,
-                });
-                return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+                try {
+                    const result = await assessDeteriorationRisk({
+                        patient_id: args.patientId,
+                        days: args.days,
+                    });
+                    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+                } catch (err: any) {
+                    return { isError: true, content: [{ type: 'text' as const, text: err.message }] };
+                }
             }
         );
 
-        // ── Tool 2: Vitals Trend (Raw Data) ─────────────────────────────────
         server.tool(
             'get_vitals_trend',
             'Retrieves chronological vital sign readings for a post-discharge patient.',
-            { days: z.number().optional().default(7) },
+            {
+                patientId: z.string().describe('The FHIR Patient ID'),
+                days: z.number().optional().default(30),
+            },
             async (args) => {
-                const sharp = extractSharpContext(req);
-                if (!sharp) return { isError: true, content: [{ type: 'text', text: 'Missing SHARP headers' }] };
-
-                const result = await getVitalsTrend({
-                    fhir_server_url: sharp.fhirServerUrl,
-                    fhir_access_token: sharp.fhirAccessToken,
-                    patient_id: sharp.patientId,
-                    days: args.days,
-                });
-                return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+                try {
+                    const result = await getVitalsTrend({
+                        patient_id: args.patientId,
+                        days: args.days,
+                    });
+                    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+                } catch (err: any) {
+                    return { isError: true, content: [{ type: 'text' as const, text: err.message }] };
+                }
             }
         );
 
-        // ── Tool 3: Clinical Context (Metadata) ─────────────────────────────
         server.tool(
             'get_clinical_context',
-            'Retrieves discharge diagnosis and active conditions for the patient.',
-            {},
-            async () => {
-                const sharp = extractSharpContext(req);
-                if (!sharp) return { isError: true, content: [{ type: 'text', text: 'Missing SHARP headers' }] };
-
-                const result = await getClinical({
-                    fhir_server_url: sharp.fhirServerUrl,
-                    fhir_access_token: sharp.fhirAccessToken,
-                    patient_id: sharp.patientId,
-                });
-                return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+            'Retrieves patient clinical context: discharge diagnosis, active conditions, days since discharge.',
+            {
+                patientId: z.string().describe('The FHIR Patient ID'),
+            },
+            async (args) => {
+                try {
+                    const result = await getClinical({
+                        patient_id: args.patientId,
+                    });
+                    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+                } catch (err: any) {
+                    return { isError: true, content: [{ type: 'text' as const, text: err.message }] };
+                }
             }
         );
 

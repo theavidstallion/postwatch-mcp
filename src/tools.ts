@@ -1,21 +1,22 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getVitalsTimeline, getClinicalContext, formatTimelineForPrompt } from './fhir.js';
 
+const FHIR_BASE = 'https://app.promptopinion.ai/api/workspaces/019dbce5-bcef-7a8d-b823-dc3fdc71a75d/fhir';
+const FHIR_TOKEN = '019e0e89-709c-76fb-9f70-d92582aa3230:Ke77hO0TkgkUqxvxsCkkmlHA4yMbuS9Q';
+
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
 export interface ToolArgs {
-    fhir_server_url: string;
-    fhir_access_token: string;
     patient_id: string;
     days?: number;
 }
 
 export async function getVitalsTrend(args: ToolArgs) {
-    const days = args.days ?? 7;
+    const days = args.days ?? 30;
     const readings = await getVitalsTimeline(
-        args.fhir_server_url,
-        args.fhir_access_token,
+        FHIR_BASE,
+        FHIR_TOKEN,
         args.patient_id,
         days
     );
@@ -31,8 +32,8 @@ export async function getVitalsTrend(args: ToolArgs) {
 
 export async function getClinical(args: ToolArgs) {
     const ctx = await getClinicalContext(
-        args.fhir_server_url,
-        args.fhir_access_token,
+        FHIR_BASE,
+        FHIR_TOKEN,
         args.patient_id
     );
 
@@ -111,7 +112,7 @@ Return ONLY valid JSON. No markdown. No explanation. Nothing outside the JSON ob
         subject: { reference: `Patient/${args.patient_id}` },
         occurrenceDateTime: new Date().toISOString(),
         basis: [{
-            display: `Analyzed ${vitalsData.total_readings} vital sign readings over ${args.days ?? 7} days`,
+            display: `Analyzed ${vitalsData.total_readings} vital sign readings over ${args.days ?? 30} days`,
         }],
         prediction: [{
             outcome: { text: assessment.primary_concern ?? 'Assessment completed' },

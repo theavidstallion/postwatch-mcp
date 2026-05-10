@@ -1,19 +1,4 @@
-import { IncomingMessage } from 'http';
+import 'dotenv/config';
 
-export interface SharpContext {
-    fhirServerUrl: string;
-    fhirAccessToken: string;
-    patientId: string;
-}
-
-export function extractSharpContext(req: IncomingMessage): SharpContext | null {
-    const fhirServerUrl = req.headers['x-fhir-server-url'] as string;
-    const fhirAccessToken = req.headers['x-fhir-access-token'] as string;
-    const patientId = req.headers['x-patient-id'] as string;
-
-    if (!fhirServerUrl || !fhirAccessToken || !patientId) {
-        return null;
-    }
-
-    return { fhirServerUrl, fhirAccessToken, patientId };
-}
+export const FHIR_BASE = 'https://app.promptopinion.ai/api/workspaces/019dbce5-bcef-7a8d-b823-dc3fdc71a75d/fhir';
+export const FHIR_TOKEN = '019e0e89-709c-76fb-9f70-d92582aa3230:Ke77hO0TkgkUqxvxsCkkmlHA4yMbuS9Q';
