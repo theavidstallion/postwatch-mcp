@@ -115,24 +115,28 @@ const transports = new Map<string, SSEServerTransport>();
 app.get('/mcp', async (req, res) => {
     console.log("🟢 Incoming SSE Connection from Prompt Opinion...");
 
-    // 1. Set the buffer-killer header BEFORE the SDK takes over
-    res.setHeader('X-Accel-Buffering', 'no');
+    // 1. Force the headers into the stream immediately
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    });
 
-    // 2. Optimization for Azure/C# parsers
-    req.socket.setKeepAlive(true);
-    req.socket.setNoDelay(true);
+    // 2. Send an immediate empty comment to "prime" the C# stream reader
+    res.write(':\n\n');
+    // Ensure the data is flushed through the Azure proxy
+    if ((res as any).flush) (res as any).flush();
 
     const server = buildMcpServer();
 
-    // 3. The SDK will handle res.writeHead(200, ...) internally now.
-    // We use the absolute path to ensure the C# client doesn't get lost.
-    const transport = new SSEServerTransport('/mcp/message', res);
+    // 3. Absolute URL is safer for enterprise proxies
+    const transport = new SSEServerTransport('https://postwatch-mcp.azurewebsites.net/mcp/message', res);
 
     await server.connect(transport);
 
     const sessionId = transport.sessionId;
     transports.set(sessionId, transport);
-
     console.log(`✅ Connection established. Session ID: ${sessionId}`);
 
     res.on('close', () => {
