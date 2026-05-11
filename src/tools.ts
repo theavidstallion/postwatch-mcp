@@ -5,7 +5,7 @@ const FHIR_BASE = 'https://app.promptopinion.ai/api/workspaces/019dbce5-bcef-7a8
 const FHIR_TOKEN = '019e0e89-709c-76fb-9f70-d92582aa3230:Ke77hO0TkgkUqxvxsCkkmlHA4yMbuS9Q';
 
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const gemini = genai.getGenerativeModel({ model: 'gemini-3.1-flash-lite' });
+const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
 
 export interface ToolArgs {
     patient_id: string;
